@@ -38,6 +38,14 @@ const DEFAULT_FIELDS = {
   },
   exam_enrollments: {
     cheating_score: 0
+  },
+  cheating_events: {
+    status: 'pending',
+    handled_by: null,
+    handled_at: null,
+    note: null,
+    relative_seconds: 0,
+    recording_type: null
   }
 };
 

@@ -255,7 +255,7 @@ router.post('/:examId/cheating-event', authenticateToken, (req, res) => {
     return res.status(403).json({ error: '权限不足' });
   }
 
-  const { event_type, description, severity } = req.body;
+  const { event_type, description, severity, relative_seconds, recording_type } = req.body;
 
   const enrollment = findOne('exam_enrollments',
     en => en.exam_id === parseInt(req.params.examId) && en.student_id === req.user.id);
@@ -264,14 +264,29 @@ router.post('/:examId/cheating-event', authenticateToken, (req, res) => {
     return res.status(400).json({ error: '未参加此考试' });
   }
 
-  insert('cheating_events', {
+  const existing = findOne('cheating_events', ce => 
+    ce.enrollment_id === enrollment.id && 
+    ce.event_type === event_type &&
+    ce.status === 'pending'
+  );
+  if (existing) {
+    return res.json({ message: '该类型告警已存在，无需重复上报', event: existing });
+  }
+
+  const event = insert('cheating_events', {
     enrollment_id: enrollment.id,
     exam_id: parseInt(req.params.examId),
     student_id: req.user.id,
     event_type,
     description: description || '',
     severity: severity || 'warning',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    relative_seconds: parseInt(relative_seconds) || 0,
+    recording_type: recording_type || null,
+    status: 'pending',
+    handled_by: null,
+    handled_at: null,
+    note: null
   });
 
   update('exam_enrollments', enrollment.id, {
@@ -283,18 +298,58 @@ router.post('/:examId/cheating-event', authenticateToken, (req, res) => {
     const exam = getById('exams', req.params.examId);
     if (exam) {
       io.to(`exam_${req.params.examId}_teacher`).emit('cheating_alert', {
+        id: event.id,
         examId: req.params.examId,
+        enrollmentId: enrollment.id,
         studentId: req.user.id,
         studentName: req.user.name,
         eventType: event_type,
         description,
         severity: severity || 'warning',
-        timestamp: new Date().toISOString()
+        timestamp: event.timestamp,
+        relativeSeconds: parseInt(relative_seconds) || 0,
+        recordingType: recording_type || null,
+        status: 'pending'
       });
     }
   }
 
-  res.json({ message: '事件已记录' });
+  res.json({ message: '事件已记录', event });
+});
+
+router.put('/:examId/cheating-events/:eventId/handle', authenticateToken, requireRole('teacher'), (req, res) => {
+  const { examId, eventId } = req.params;
+  const { note, status } = req.body;
+
+  const exam = getById('exams', examId);
+  if (!exam || exam.teacher_id !== req.user.id) {
+    return res.status(403).json({ error: '无权处理此告警' });
+  }
+
+  const event = getById('cheating_events', eventId);
+  if (!event || event.exam_id !== parseInt(examId)) {
+    return res.status(404).json({ error: '告警不存在' });
+  }
+
+  const updated = update('cheating_events', eventId, {
+    status: status || 'resolved',
+    handled_by: req.user.id,
+    handled_at: new Date().toISOString(),
+    note: note || null
+  });
+
+  const io = req.app.get('io');
+  if (io) {
+    io.to(`exam_${examId}_teacher`).emit('cheating_event_updated', {
+      id: event.id,
+      status: updated.status,
+      handledBy: req.user.name,
+      handledAt: updated.handled_at,
+      note: updated.note
+    });
+  }
+
+  res.json({ message: '处理成功', event: updated });
 });
 
 router.post('/:examId/behavior-log', authenticateToken, (req, res) => {

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../../components/Layout';
-import { reportAPI, examAPI } from '../../services/api';
+import { reportAPI, examAPI, recordingAPI, examActionAPI } from '../../services/api';
 
 export default function ReportPage() {
   const { examId } = useParams();
@@ -13,6 +13,18 @@ export default function ReportPage() {
   const [studentReport, setStudentReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [studentLoading, setStudentLoading] = useState(false);
+  const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [selectedRecording, setSelectedRecording] = useState(null);
+  const [seekSeconds, setSeekSeconds] = useState(0);
+  const [activeEventType, setActiveEventType] = useState(null);
+  const videoRef = useRef(null);
+
+  const EVENT_TYPE_META = {
+    window_switch_exceeded: { label: '窗口切换超限', icon: '🔀', color: 'bg-amber-50 border-amber-200', textColor: 'text-amber-700', recordingType: 'screen' },
+    multiple_faces: { label: '检测到多人脸', icon: '👥', color: 'bg-red-50 border-red-200', textColor: 'text-red-700', recordingType: 'camera' },
+    no_face_detected: { label: '长时间离开', icon: '🚶', color: 'bg-orange-50 border-orange-200', textColor: 'text-orange-700', recordingType: 'camera' },
+    screen_share_stopped: { label: '屏幕共享停止', icon: '📵', color: 'bg-purple-50 border-purple-200', textColor: 'text-purple-700', recordingType: 'screen' }
+  };
 
   useEffect(() => {
     loadData();
@@ -43,6 +55,61 @@ export default function ReportPage() {
       console.error('加载学生报告失败:', err);
     } finally {
       setStudentLoading(false);
+    }
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds || seconds < 0) return '00:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handlePlayRecordingAt = (event) => {
+    const recording = event.recording || (studentReport?.recordingsList && studentReport.recordingsList[0]);
+    if (!recording) {
+      alert('暂无录像可播放');
+      return;
+    }
+    setSelectedRecording(recording);
+    setSeekSeconds(event.relative_seconds || 0);
+    setShowRecordingModal(true);
+  };
+
+  const handleVideoLoaded = () => {
+    if (videoRef.current && seekSeconds > 0) {
+      videoRef.current.currentTime = seekSeconds;
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleMarkResolvedFromReport = async (event) => {
+    if (!window.confirm('确认标记此告警为已处理？')) return;
+    try {
+      await examActionAPI.handleCheatingEvent(examId, event.id, '报告中标记处理', 'resolved');
+      setStudentReport(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          cheatingAnalysis: {
+            ...prev.cheatingAnalysis,
+            events: prev.cheatingAnalysis.events.map(e => 
+              e.id === event.id ? { ...e, status: 'resolved', handled_by: '当前老师', handled_at: new Date().toISOString(), note: '报告中标记处理' } : e
+            ),
+            eventsByType: Object.fromEntries(
+              Object.entries(prev.cheatingAnalysis.eventsByType || {}).map(([type, events]) => [
+                type,
+                events.map(e => e.id === event.id ? { ...e, status: 'resolved', handled_by: '当前老师', handled_at: new Date().toISOString(), note: '报告中标记处理' } : e)
+              ])
+            ),
+            pendingCount: Math.max(0, (prev.cheatingAnalysis.pendingCount || 0) - 1),
+            resolvedCount: (prev.cheatingAnalysis.resolvedCount || 0) + 1
+          }
+        };
+      });
+    } catch (err) {
+      console.error('标记失败:', err);
+      alert('标记失败');
     }
   };
 
@@ -256,25 +323,124 @@ export default function ReportPage() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-4 gap-3 mb-4">
+                <div className="bg-gray-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-gray-500">窗口切换次数</div>
+                  <div className="text-xl font-bold text-amber-600">{studentReport.cheatingAnalysis.windowSwitchTotalCount || 0}</div>
+                </div>
+                <div className="bg-red-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-gray-500">待处理告警</div>
+                  <div className="text-xl font-bold text-red-600">{studentReport.cheatingAnalysis.pendingCount || 0}</div>
+                </div>
+                <div className="bg-green-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-gray-500">已处理告警</div>
+                  <div className="text-xl font-bold text-green-600">{studentReport.cheatingAnalysis.resolvedCount || 0}</div>
+                </div>
+                <div className="bg-blue-50 rounded-xl p-3 text-center">
+                  <div className="text-xs text-gray-500">录像片段</div>
+                  <div className="text-xl font-bold text-blue-600">{studentReport.recordingsList?.length || 0}</div>
+                </div>
+              </div>
+
               <div>
-                <h4 className="font-medium text-gray-800 mb-3">作弊事件详情</h4>
-                {studentReport.cheatingAnalysis.events.length === 0 ? (
-                  <div className="bg-green-50 rounded-xl p-4 text-center text-green-700">
-                    无异常事件记录 ✅
+                <h4 className="font-medium text-gray-800 mb-3">异常画像</h4>
+                
+                <div className="flex gap-2 mb-4 flex-wrap">
+                  {Object.entries(EVENT_TYPE_META).map(([type, meta]) => {
+                    const count = studentReport.cheatingAnalysis.eventsByType?.[type]?.length || 0;
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => setActiveEventType(activeEventType === type ? null : type)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition ${
+                          activeEventType === type 
+                            ? `${meta.color} ${meta.textColor} ring-2 ring-offset-1 ring-current`
+                            : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span>{meta.icon}</span>
+                        <span className="font-medium">{meta.label}</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                          count > 0 ? 'bg-white/80 text-gray-700' : 'bg-gray-200 text-gray-500'
+                        }`}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {studentReport.cheatingAnalysis.totalAlerts === 0 ? (
+                  <div className="bg-green-50 rounded-xl p-6 text-center text-green-700">
+                    <div className="text-3xl mb-2">✅</div>
+                    无异常事件记录，考试过程非常规范！
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {studentReport.cheatingAnalysis.events.map((event, idx) => (
-                      <div key={idx} className="bg-red-50 rounded-lg p-3 flex items-start gap-3">
-                        <span className="text-red-500 mt-0.5">⚠️</span>
-                        <div className="flex-1">
-                          <p className="text-sm text-gray-800">{event.description}</p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            {new Date(event.timestamp).toLocaleString('zh-CN')}
-                          </p>
+                  <div className="space-y-4">
+                    {Object.entries(studentReport.cheatingAnalysis.eventsByType || {}).map(([type, events]) => {
+                      if (activeEventType && activeEventType !== type) return null;
+                      if (events.length === 0) return null;
+                      const meta = EVENT_TYPE_META[type] || { label: type, icon: '⚠️', color: 'bg-gray-50 border-gray-200' };
+                      
+                      return (
+                        <div key={type} className={`border rounded-xl p-4 ${meta.color}`}>
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">{meta.icon}</span>
+                              <span className="font-medium text-gray-800">{meta.label}</span>
+                              <span className="text-sm text-gray-500">· 共 {events.length} 次</span>
+                            </div>
+                          </div>
+
+                          <div className="relative pl-6 space-y-0">
+                            {events.map((event, idx) => (
+                              <div key={event.id || idx} className="relative pb-3">
+                                {idx < events.length - 1 && (
+                                  <div className="absolute left-[-18px] top-4 bottom-0 w-0.5 bg-gray-200"></div>
+                                )}
+                                <div className="absolute left-[-20px] top-1 w-4 h-4 rounded-full border-2 border-white bg-gray-300 shadow"></div>
+                                
+                                <div className="bg-white/80 rounded-lg p-3 shadow-sm">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                      <p className="text-sm text-gray-800">{event.description}</p>
+                                      <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
+                                        <span>⏱️ {formatDuration(event.relative_seconds)}</span>
+                                        <span>🕒 {new Date(event.timestamp).toLocaleTimeString('zh-CN')}</span>
+                                        <span className={`px-1.5 py-0.5 rounded ${event.status === 'resolved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                          {event.status === 'resolved' ? '已处理' : '待处理'}
+                                        </span>
+                                      </div>
+                                      {event.note && (
+                                        <p className="text-xs text-gray-500 mt-1.5 bg-gray-100 rounded p-2">
+                                          📝 处理备注：{event.note}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-col gap-1.5 ml-3">
+                                      <button
+                                        onClick={() => handlePlayRecordingAt(event)}
+                                        className="text-xs px-2 py-1 bg-primary-500 text-white rounded hover:bg-primary-600 transition flex items-center gap-1"
+                                      >
+                                        ▶ 看录像
+                                      </button>
+                                      {event.status !== 'resolved' && (
+                                        <button
+                                          onClick={() => handleMarkResolvedFromReport(event)}
+                                          className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition"
+                                        >
+                                          ✓ 标记处理
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -310,6 +476,47 @@ export default function ReportPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRecordingModal && selectedRecording && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-6">
+          <div className="bg-black rounded-2xl w-full max-w-5xl overflow-hidden">
+            <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-medium text-white">
+                  🎥 {selectedRecording.type === 'camera' ? '摄像头录像' : '屏幕共享录像'}
+                </h3>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  {studentReport?.studentInfo?.name} · 跳转至 {formatDuration(seekSeconds)} 处
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowRecordingModal(false);
+                  setSelectedRecording(null);
+                }}
+                className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              <video
+                ref={videoRef}
+                src={recordingAPI.getRecordingPlayUrl(selectedRecording.id)}
+                controls
+                autoPlay
+                className="w-full aspect-video bg-black rounded"
+                onLoadedMetadata={handleVideoLoaded}
+              />
+              {seekSeconds > 0 && (
+                <p className="text-sm text-gray-400 mt-3 text-center">
+                  ⏱️ 已自动跳转到第 {formatDuration(seekSeconds)}（异常发生时间点）
+                </p>
+              )}
             </div>
           </div>
         </div>

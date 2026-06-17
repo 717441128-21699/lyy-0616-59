@@ -122,6 +122,33 @@ export default function StudentReport() {
           </div>
         </div>
 
+        <div className="grid grid-cols-4 gap-4">
+          <div className="bg-white rounded-2xl shadow-sm p-5 text-center">
+            <h3 className="text-gray-500 text-sm mb-1">窗口切换总次数</h3>
+            <div className="text-2xl font-bold text-amber-600">
+              {report.cheatingAnalysis.windowSwitchTotalCount || 0}
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl shadow-sm p-5 text-center">
+            <h3 className="text-gray-500 text-sm mb-1">窗口切换超限</h3>
+            <div className="text-2xl font-bold text-amber-600">
+              {report.cheatingAnalysis.eventBreakdown?.windowSwitchExceeded || 0}
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl shadow-sm p-5 text-center">
+            <h3 className="text-gray-500 text-sm mb-1">多人脸检测</h3>
+            <div className="text-2xl font-bold text-red-600">
+              {report.cheatingAnalysis.eventBreakdown?.multipleFaces || 0}
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl shadow-sm p-5 text-center">
+            <h3 className="text-gray-500 text-sm mb-1">长时间离开</h3>
+            <div className="text-2xl font-bold text-orange-600">
+              {report.cheatingAnalysis.eventBreakdown?.noFaceDetected || 0}
+            </div>
+          </div>
+        </div>
+
         <div className="bg-white rounded-2xl shadow-sm p-6">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">📝 答题详情</h3>
           <div className="space-y-3">
@@ -158,29 +185,35 @@ export default function StudentReport() {
           </div>
         </div>
 
-        {report.cheatingAnalysis.events.length > 0 && (
+        {report.cheatingAnalysis.totalAlerts > 0 && (
           <div className="bg-white rounded-2xl shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">⚠️ 异常事件记录</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {report.cheatingAnalysis.events.map((event, index) => (
-                <div
-                  key={index}
-                  className="flex items-start gap-3 p-3 bg-red-50 rounded-lg"
-                >
-                  <span className="text-red-500 mt-0.5">⚠️</span>
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-800">{event.description}</p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {new Date(event.timestamp).toLocaleString('zh-CN')}
-                    </p>
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">⚠️ 异常事件明细</h3>
+            <div className="space-y-4">
+              {Object.entries(report.cheatingAnalysis.eventsByType || {}).map(([type, events]) => {
+                if (events.length === 0) return null;
+                return (
+                  <div key={type} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-lg">{getEventTypeIcon(type)}</span>
+                      <span className="font-medium text-gray-800">{getEventTypeLabel(type)}</span>
+                      <span className="text-sm text-gray-500">· 共 {events.length} 次</span>
+                    </div>
+                    <div className="space-y-2">
+                      {events.map((event, idx) => (
+                        <div key={event.id || idx} className="bg-white rounded-lg p-3 flex items-start gap-3">
+                          <span className="text-red-500 mt-0.5">⚠️</span>
+                          <div className="flex-1">
+                            <p className="text-sm text-gray-800">{event.description}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {new Date(event.timestamp).toLocaleString('zh-CN')}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    event.severity === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'
-                  }`}>
-                    {getEventTypeLabel(event.event_type)}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -214,12 +247,22 @@ function getQuestionTypeLabel(type) {
 
 function getEventTypeLabel(type) {
   const labels = {
-    window_switch: '窗口切换',
-    multiple_faces: '多人脸',
-    no_face_detected: '无人脸',
+    window_switch_exceeded: '窗口切换超限',
+    multiple_faces: '多人脸检测',
+    no_face_detected: '长时间离开',
     screen_share_stopped: '屏幕共享停止'
   };
   return labels[type] || type;
+}
+
+function getEventTypeIcon(type) {
+  const icons = {
+    window_switch_exceeded: '🔀',
+    multiple_faces: '👥',
+    no_face_detected: '🚶',
+    screen_share_stopped: '📵'
+  };
+  return icons[type] || '⚠️';
 }
 
 function getActionTypeLabel(type) {

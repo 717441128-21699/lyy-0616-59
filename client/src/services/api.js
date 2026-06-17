@@ -50,8 +50,8 @@ export const examActionAPI = {
   submitAnswer: (examId, questionId, answer) => api.post(`/exam/${examId}/answer/${questionId}`, { answer }),
   getAnswers: (examId) => api.get(`/exam/${examId}/answers`),
   submitExam: (examId) => api.post(`/exam/${examId}/submit`),
-  reportCheating: (examId, event_type, description, severity) =>
-    api.post(`/exam/${examId}/cheating-event`, { event_type, description, severity }),
+  reportCheating: (examId, event_type, description, severity, relative_seconds = 0, recording_type = null) =>
+    api.post(`/exam/${examId}/cheating-event`, { event_type, description, severity, relative_seconds, recording_type }),
   logBehavior: (examId, action_type, action_data) =>
     api.post(`/exam/${examId}/behavior-log`, { action_type, action_data }),
   getEnrollments: (examId) => api.get(`/exam/${examId}/enrollments`),
@@ -59,6 +59,8 @@ export const examActionAPI = {
   gradeAnswer: (examId, enrollmentId, answerId, score, teacher_comment) =>
     api.post(`/exam/${examId}/enrollment/${enrollmentId}/grade/${answerId}`, { score, teacher_comment }),
   getCheatingEvents: (examId) => api.get(`/exam/${examId}/cheating-events`),
+  handleCheatingEvent: (examId, eventId, note, status = 'resolved') =>
+    api.put(`/exam/${examId}/cheating-events/${eventId}/handle`, { note, status }),
 };
 
 export const reportAPI = {

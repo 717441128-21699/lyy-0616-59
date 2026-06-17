@@ -56,6 +56,7 @@ export default function ExamRoom() {
   const screenChunksRef = useRef([]);
   const cameraStartTimeRef = useRef(null);
   const screenStartTimeRef = useRef(null);
+  const examStartTimeRef = useRef(null);
 
   const loadFaceModels = useCallback(async () => {
     try {
@@ -128,6 +129,8 @@ export default function ExamRoom() {
       
       setExamStarted(true);
       setEnrollmentId(data.enrollment.id);
+      const totalSeconds = exam.duration * 60;
+      examStartTimeRef.current = Date.now() - (totalSeconds - data.remaining_seconds) * 1000;
       
       setTimeout(() => {
         if (cameraEnabled && !cameraRecorderRef.current) {
@@ -220,7 +223,7 @@ export default function ExamRoom() {
           
           if (!windowAlertSentRef.current) {
             windowAlertSentRef.current = true;
-            reportCheating('window_switch_exceeded', `切换窗口超过限制${exam.max_window_switches}次，当前已切换${newCount}次`, 'high');
+            reportCheating('window_switch_exceeded', `切换窗口超过限制${exam.max_window_switches}次，当前已切换${newCount}次`, 'high', 'screen');
           }
         }
       }
@@ -290,7 +293,7 @@ export default function ExamRoom() {
         stopScreenRecording();
         if (!screenStopAlertSentRef.current) {
           screenStopAlertSentRef.current = true;
-          reportCheating('screen_share_stopped', '屏幕共享被停止', 'warning');
+          reportCheating('screen_share_stopped', '屏幕共享被停止', 'warning', 'screen');
         }
         showWarningMessage('警告：屏幕共享已停止，请重新开启！');
       };
@@ -325,7 +328,7 @@ export default function ExamRoom() {
             setFaceDetected(false);
             if (!noFaceAlertSentRef.current) {
               noFaceAlertSentRef.current = true;
-              reportCheating('no_face_detected', `长时间未检测到人脸（超过${Math.round(noFaceDuration)}秒）`, 'high');
+              reportCheating('no_face_detected', `长时间未检测到人脸（超过${Math.round(noFaceDuration)}秒）`, 'high', 'camera');
             }
             showWarningMessage('警告：长时间未检测到人脸，请回到摄像头前！');
           }
@@ -338,7 +341,7 @@ export default function ExamRoom() {
             setMultipleFacesDetected(true);
             if (!multipleFacesAlertSentRef.current) {
               multipleFacesAlertSentRef.current = true;
-              reportCheating('multiple_faces', `检测到 ${detections.length} 张人脸`, 'high');
+              reportCheating('multiple_faces', `检测到 ${detections.length} 张人脸`, 'high', 'camera');
             }
             showWarningMessage('警告：检测到多张人脸，请确保只有您一人在考试！');
           } else {
@@ -500,10 +503,13 @@ export default function ExamRoom() {
     }
   };
 
-  const reportCheating = async (eventType, description, severity = 'warning') => {
+  const reportCheating = async (eventType, description, severity = 'warning', recordingType = null) => {
     setCheatingCount(prev => prev + 1);
     try {
-      await examActionAPI.reportCheating(examId, eventType, description, severity);
+      const elapsedMs = examStartTimeRef.current ? Date.now() - examStartTimeRef.current : 0;
+      const relativeSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+      
+      await examActionAPI.reportCheating(examId, eventType, description, severity, relativeSeconds, recordingType);
       
       if (socketRef.current) {
         socketRef.current.emit('cheating_alert', {
@@ -512,7 +518,9 @@ export default function ExamRoom() {
           studentName: user.name,
           eventType,
           description,
-          severity
+          severity,
+          relativeSeconds,
+          recordingType
         });
       }
     } catch (err) {

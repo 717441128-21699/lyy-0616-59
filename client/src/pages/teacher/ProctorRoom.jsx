@@ -20,6 +20,11 @@ export default function ProctorRoom() {
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [messageTarget, setMessageTarget] = useState(null);
   
+  const [alertFilter, setAlertFilter] = useState('pending');
+  const [showHandleModal, setShowHandleModal] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState(null);
+  const [handleNote, setHandleNote] = useState('');
+  
   const socketRef = useRef(null);
   const alertsRef = useRef([]);
 
@@ -94,14 +99,39 @@ export default function ProctorRoom() {
 
     socketRef.current.on('cheating_alert', (data) => {
       const newAlert = {
-        id: Date.now(),
+        id: data.id || Date.now(),
         ...data,
         event_type: data.eventType,
         student_name: data.studentName,
-        timestamp: data.timestamp
+        timestamp: data.timestamp,
+        relative_seconds: data.relativeSeconds || 0,
+        recording_type: data.recordingType,
+        status: 'pending'
       };
       
-      setCheatingAlerts(prev => [newAlert, ...prev].slice(0, 50));
+      setCheatingAlerts(prev => {
+        const exists = prev.some(a => 
+          a.id === newAlert.id || 
+          (a.event_type === newAlert.event_type && a.studentId === newAlert.studentId && a.status === 'pending')
+        );
+        if (exists) return prev;
+        return [newAlert, ...prev].slice(0, 100);
+      });
+    });
+
+    socketRef.current.on('cheating_event_updated', (data) => {
+      setCheatingAlerts(prev => prev.map(a => {
+        if (a.id === data.id) {
+          return {
+            ...a,
+            status: data.status,
+            handled_by: data.handledBy,
+            handled_at: data.handledAt,
+            note: data.note
+          };
+        }
+        return a;
+      }));
     });
 
     socketRef.current.on('student_status_update', (data) => {
@@ -142,6 +172,25 @@ export default function ProctorRoom() {
     setShowMessageModal(true);
   };
 
+  const openHandleModal = (alert) => {
+    setSelectedAlert(alert);
+    setHandleNote(alert.note || '');
+    setShowHandleModal(true);
+  };
+
+  const handleMarkResolved = async () => {
+    if (!selectedAlert) return;
+    try {
+      await examActionAPI.handleCheatingEvent(examId, selectedAlert.id, handleNote, 'resolved');
+      setShowHandleModal(false);
+      setSelectedAlert(null);
+      setHandleNote('');
+    } catch (err) {
+      console.error('标记处理失败:', err);
+      alert('标记失败，请重试');
+    }
+  };
+
   const getStudentFrame = (studentId) => {
     return null;
   };
@@ -156,13 +205,29 @@ export default function ProctorRoom() {
 
   const getEventTypeLabel = (type) => {
     const labels = {
-      window_switch: '窗口切换',
+      window_switch_exceeded: '窗口切换超限',
       multiple_faces: '多人脸检测',
       no_face_detected: '未检测到人脸',
       screen_share_stopped: '屏幕共享停止'
     };
     return labels[type] || type;
   };
+
+  const getStatusLabel = (status) => {
+    switch (status) {
+      case 'pending': return { text: '待处理', className: 'bg-red-500 text-white' };
+      case 'resolved': return { text: '已处理', className: 'bg-green-500 text-white' };
+      default: return { text: status, className: 'bg-gray-500 text-white' };
+    }
+  };
+
+  const filteredAlerts = cheatingAlerts.filter(alert => {
+    if (alertFilter === 'all') return true;
+    return (alert.status || 'pending') === alertFilter;
+  });
+
+  const pendingCount = cheatingAlerts.filter(a => (a.status || 'pending') === 'pending').length;
+  const resolvedCount = cheatingAlerts.filter(a => a.status === 'resolved').length;
 
   if (loading) {
     return (
@@ -225,47 +290,94 @@ export default function ProctorRoom() {
           )}
         </div>
 
-        <aside className="w-80 bg-white rounded-2xl shadow-sm flex flex-col overflow-hidden">
+        <aside className="w-96 bg-white rounded-2xl shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-gray-100">
-            <h3 className="font-medium text-gray-800">⚠️ 异常事件</h3>
-            <p className="text-xs text-gray-500 mt-1">共 {cheatingAlerts.length} 条记录</p>
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium text-gray-800">⚠️ 异常事件</h3>
+              <div className="flex gap-1 text-xs">
+                <span className="px-2 py-0.5 bg-red-100 text-red-600 rounded-full">{pendingCount} 待处理</span>
+                <span className="px-2 py-0.5 bg-green-100 text-green-600 rounded-full">{resolvedCount} 已处理</span>
+              </div>
+            </div>
+            <div className="flex gap-1 mt-3">
+              {['pending', 'all', 'resolved'].map(filter => (
+                <button
+                  key={filter}
+                  onClick={() => setAlertFilter(filter)}
+                  className={`flex-1 py-1.5 text-xs font-medium rounded-lg transition ${
+                    alertFilter === filter 
+                      ? 'bg-primary-500 text-white' 
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {filter === 'pending' ? '待处理' : filter === 'all' ? '全部' : '已处理'}
+                </button>
+              ))}
+            </div>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin">
-            {cheatingAlerts.length === 0 ? (
+          <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin">
+            {filteredAlerts.length === 0 ? (
               <div className="text-center py-8">
                 <div className="text-4xl mb-2">✅</div>
-                <p className="text-gray-500 text-sm">暂无异常事件</p>
+                <p className="text-gray-500 text-sm">暂无{alertFilter === 'pending' ? '待处理' : alertFilter === 'resolved' ? '已处理' : ''}异常事件</p>
               </div>
             ) : (
-              cheatingAlerts.map((alert, index) => (
-                <div
-                  key={alert.id || index}
-                  className={`p-3 rounded-lg border ${getSeverityColor(alert.severity)}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <span className="font-medium text-sm">{alert.student_name || alert.studentName}</span>
-                    <span className="text-xs opacity-75">
-                      {new Date(alert.timestamp).toLocaleTimeString('zh-CN')}
-                    </span>
+              filteredAlerts.map((alert, index) => {
+                const statusLabel = getStatusLabel(alert.status || 'pending');
+                return (
+                  <div
+                    key={alert.id || index}
+                    className={`p-3 rounded-lg border ${getSeverityColor(alert.severity)} ${alert.status === 'resolved' ? 'opacity-60' : ''}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className="font-medium text-sm">{alert.student_name || alert.studentName}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusLabel.className}`}>
+                          {statusLabel.text}
+                        </span>
+                        <span className="text-xs opacity-75">
+                          {new Date(alert.timestamp).toLocaleTimeString('zh-CN')}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-sm mt-1 font-medium">{getEventTypeLabel(alert.event_type || alert.eventType)}</p>
+                    <p className="text-xs mt-1 opacity-80">{alert.description}</p>
+                    
+                    {alert.note && (
+                      <div className="mt-2 p-2 bg-white/60 rounded text-xs">
+                        <span className="text-gray-500">处理备注：</span>{alert.note}
+                      </div>
+                    )}
+                    
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openMessageModal({
+                            studentId: alert.student_id || alert.studentId,
+                            studentName: alert.student_name || alert.studentName
+                          });
+                        }}
+                        className="text-xs px-2 py-1 bg-white/50 rounded hover:bg-white/70 transition"
+                      >
+                        发消息
+                      </button>
+                      {alert.status !== 'resolved' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openHandleModal(alert);
+                          }}
+                          className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition"
+                        >
+                          标记已处理
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-sm mt-1">{alert.description || getEventTypeLabel(alert.event_type || alert.eventType)}</p>
-                  <div className="flex gap-2 mt-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openMessageModal({
-                          studentId: alert.student_id || alert.studentId,
-                          studentName: alert.student_name || alert.studentName
-                        });
-                      }}
-                      className="text-xs px-2 py-1 bg-white/50 rounded hover:bg-white/70 transition"
-                    >
-                      发消息
-                    </button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </aside>
@@ -331,6 +443,56 @@ export default function ProctorRoom() {
                 className="px-4 py-2 bg-primary-500 text-white rounded-lg font-medium hover:bg-primary-600 transition"
               >
                 发送
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHandleModal && selectedAlert && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md mx-4">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl">
+              ⚠️
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-medium text-gray-800">
+                标记告警已处理
+              </h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {selectedAlert.student_name || selectedAlert.studentName} · {getEventTypeLabel(selectedAlert.event_type || selectedAlert.eventType)}
+              </p>
+            </div>
+          </div>
+            <div className="bg-gray-50 rounded-xl p-4 mb-4">
+              <p className="text-sm text-gray-700">{selectedAlert.description}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                发生时间：{new Date(selectedAlert.timestamp).toLocaleString('zh-CN')}
+              </p>
+            </div>
+            <textarea
+              value={handleNote}
+              onChange={(e) => setHandleNote(e.target.value)}
+              className="w-full h-24 p-3 border border-gray-300 rounded-xl resize-none focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm"
+              placeholder="请输入处理备注（可选）..."
+            />
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={() => {
+                  setShowHandleModal(false);
+                  setSelectedAlert(null);
+                  setHandleNote('');
+                }}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleMarkResolved}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition"
+              >
+                确认处理
               </button>
             </div>
           </div>

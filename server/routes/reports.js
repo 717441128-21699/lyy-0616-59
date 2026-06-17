@@ -35,6 +35,8 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   const behaviorLogs = findMany('behavior_logs', bl => bl.enrollment_id === enrollment.id)
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const recordings = findMany('recordings', r => r.enrollment_id === enrollment.id)
+    .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
 
   const answerMap = new Map(answers.map(a => [a.question_id, a]));
 
@@ -76,8 +78,31 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
     : 0;
 
   const eventTypeCounts = {};
+  const eventsByType = {};
+  const eventTypeLabels = {
+    'window_switch_exceeded': { label: '窗口切换超限', icon: '🔀', type: 'window' },
+    'multiple_faces': { label: '检测到多人脸', icon: '👥', type: 'camera' },
+    'no_face_detected': { label: '长时间离开', icon: '🚶', type: 'camera' },
+    'screen_share_stopped': { label: '屏幕共享停止', icon: '📵', type: 'screen' }
+  };
+
   cheatingEvents.forEach(event => {
-    eventTypeCounts[event.event_type] = (eventTypeCounts[event.event_type] || 0) + 1;
+    const type = event.event_type;
+    eventTypeCounts[type] = (eventTypeCounts[type] || 0) + 1;
+    if (!eventsByType[type]) eventsByType[type] = [];
+    
+    const meta = eventTypeLabels[type] || { label: type, icon: '⚠️', type: 'camera' };
+    let matchedRecording = null;
+    if (meta.type && recordings.length > 0) {
+      matchedRecording = recordings.find(r => r.type === meta.type) || recordings.find(r => r.type === 'camera') || recordings[0];
+    }
+    
+    eventsByType[type].push({
+      ...event,
+      label: meta.label,
+      icon: meta.icon,
+      recording: matchedRecording
+    });
   });
 
   const windowSwitchExceedCount = eventTypeCounts['window_switch_exceeded'] || 0;
@@ -95,6 +120,9 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
         } catch (e) { return 0; }
       }))
     : 0;
+
+  const pendingCount = cheatingEvents.filter(e => e.status === 'pending').length;
+  const resolvedCount = cheatingEvents.filter(e => e.status === 'resolved').length;
 
   const cheatingScore = (enrollment.cheating_score != null) 
     ? enrollment.cheating_score 
@@ -146,6 +174,8 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
       cheatingScore,
       warningLevel,
       windowSwitchTotalCount,
+      pendingCount,
+      resolvedCount,
       eventBreakdown: {
         windowSwitchExceeded: windowSwitchExceedCount,
         multipleFaces: multipleFaceCount,
@@ -153,8 +183,10 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
         screenShareStopped: screenShareStopCount,
         other: Math.max(0, cheatingEvents.length - alertCount)
       },
+      eventsByType,
       events: cheatingEvents
     },
+    recordingsList: recordings,
     behaviorAnalysis: {
       totalActions: behaviorLogs.length,
       actionTypes: countByType(behaviorLogs),
