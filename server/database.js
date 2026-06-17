@@ -27,6 +27,57 @@ let nextIds = {
   recordings: 1
 };
 
+const DEFAULT_TABLES = ['users', 'exams', 'questions', 'exam_enrollments', 'answers', 'cheating_events', 'behavior_logs', 'recordings'];
+const DEFAULT_FIELDS = {
+  exams: {
+    allow_review: 1,
+    max_window_switches: 3,
+    face_detection_enabled: 1,
+    screen_share_required: 0,
+    status: 'published'
+  },
+  exam_enrollments: {
+    cheating_score: 0
+  }
+};
+
+function migrateDatabase() {
+  let changed = false;
+
+  DEFAULT_TABLES.forEach(table => {
+    if (!db[table]) {
+      db[table] = [];
+      changed = true;
+      console.log(`[迁移] 补全缺失表: ${table}`);
+    }
+  });
+
+  DEFAULT_TABLES.forEach(table => {
+    if (nextIds[table] == null) {
+      const maxId = db[table].length > 0 ? Math.max(...db[table].map(r => r.id || 0)) : 0;
+      nextIds[table] = maxId + 1;
+      changed = true;
+      console.log(`[迁移] 补全nextIds.${table}: ${nextIds[table]}`);
+    }
+  });
+
+  Object.entries(DEFAULT_FIELDS).forEach(([table, defaults]) => {
+    db[table].forEach(record => {
+      Object.entries(defaults).forEach(([field, value]) => {
+        if (record[field] == null) {
+          record[field] = value;
+          changed = true;
+        }
+      });
+    });
+  });
+
+  if (changed) {
+    saveDatabase();
+    console.log('[迁移] 数据库迁移完成');
+  }
+}
+
 function loadDatabase() {
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -35,8 +86,9 @@ function loadDatabase() {
   if (fs.existsSync(dbFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(dbFile, 'utf-8'));
-      db = data.db || db;
-      nextIds = data.nextIds || nextIds;
+      db = { ...db, ...(data.db || {}) };
+      nextIds = { ...nextIds, ...(data.nextIds || {}) };
+      migrateDatabase();
       console.log('数据库加载成功');
     } catch (err) {
       console.error('数据库加载失败，使用初始数据:', err.message);

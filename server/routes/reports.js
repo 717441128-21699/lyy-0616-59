@@ -80,14 +80,30 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
     eventTypeCounts[event.event_type] = (eventTypeCounts[event.event_type] || 0) + 1;
   });
 
-  const windowSwitchCount = eventTypeCounts['window_switch'] || 0;
+  const windowSwitchExceedCount = eventTypeCounts['window_switch_exceeded'] || 0;
   const multipleFaceCount = eventTypeCounts['multiple_faces'] || 0;
   const noFaceCount = eventTypeCounts['no_face_detected'] || 0;
+  const screenShareStopCount = eventTypeCounts['screen_share_stopped'] || 0;
+  const alertCount = windowSwitchExceedCount + multipleFaceCount + noFaceCount + screenShareStopCount;
 
-  const cheatingScore = enrollment.cheating_score || 0;
+  const windowSwitchLogs = behaviorLogs.filter(l => l.action_type === 'window_switch');
+  const windowSwitchTotalCount = windowSwitchLogs.length > 0 
+    ? Math.max(...windowSwitchLogs.map(l => {
+        try {
+          const d = typeof l.details === 'string' ? JSON.parse(l.details) : l.details;
+          return parseInt(d?.count) || 0;
+        } catch (e) { return 0; }
+      }))
+    : 0;
+
+  const cheatingScore = (enrollment.cheating_score != null) 
+    ? enrollment.cheating_score 
+    : alertCount;
+  
   const warningLevel = cheatingScore > 10 ? 'high' 
     : cheatingScore > 5 ? 'medium' 
-    : 'low';
+    : cheatingScore > 0 ? 'low'
+    : 'none';
 
   const report = {
     examInfo: {
@@ -125,14 +141,17 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
       timeUsagePercent: exam.duration > 0 ? Math.min(100, Math.round((totalAnswerTime / (exam.duration * 60)) * 100)) : 0
     },
     cheatingAnalysis: {
+      totalAlerts: alertCount,
       totalEvents: cheatingEvents.length,
       cheatingScore,
       warningLevel,
+      windowSwitchTotalCount,
       eventBreakdown: {
-        windowSwitch: windowSwitchCount,
+        windowSwitchExceeded: windowSwitchExceedCount,
         multipleFaces: multipleFaceCount,
         noFaceDetected: noFaceCount,
-        other: cheatingEvents.length - windowSwitchCount - multipleFaceCount - noFaceCount
+        screenShareStopped: screenShareStopCount,
+        other: Math.max(0, cheatingEvents.length - alertCount)
       },
       events: cheatingEvents
     },

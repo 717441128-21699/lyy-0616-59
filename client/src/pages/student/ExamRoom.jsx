@@ -44,6 +44,8 @@ export default function ExamRoom() {
   const visibilityCleanupRef = useRef(null);
   
   const windowAlertSentRef = useRef(false);
+  const windowWarningShownRef = useRef(false);
+  const windowSwitchCountRef = useRef(0);
   const noFaceAlertSentRef = useRef(false);
   const multipleFacesAlertSentRef = useRef(false);
   const screenStopAlertSentRef = useRef(false);
@@ -144,8 +146,10 @@ export default function ExamRoom() {
       
       if (data.window_switch_count) {
         setWindowSwitchCount(data.window_switch_count);
+        windowSwitchCountRef.current = data.window_switch_count;
         if (exam?.max_window_switches && data.window_switch_count > exam.max_window_switches) {
           windowAlertSentRef.current = true;
+          windowWarningShownRef.current = true;
         }
       }
       
@@ -202,17 +206,21 @@ export default function ExamRoom() {
   const setupVisibilityListener = () => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        const newCount = windowSwitchCount + 1;
+        windowSwitchCountRef.current = windowSwitchCountRef.current + 1;
+        const newCount = windowSwitchCountRef.current;
         setWindowSwitchCount(newCount);
         
         examActionAPI.logBehavior(examId, 'window_switch', { count: newCount, time: new Date().toISOString() }).catch(() => {});
         
         if (exam?.max_window_switches && newCount > exam.max_window_switches) {
-          showWarningMessage(`警告：您已切换窗口 ${newCount} 次，超过限制！请立即停止切换窗口。`);
+          if (!windowWarningShownRef.current) {
+            windowWarningShownRef.current = true;
+            showWarningMessage(`警告：您已切换窗口 ${newCount} 次，超过限制（${exam.max_window_switches}次）！请立即停止切换，监考老师已收到通知。`);
+          }
           
           if (!windowAlertSentRef.current) {
             windowAlertSentRef.current = true;
-            reportCheating('window_switch_exceeded', `切换窗口超过限制（${exam.max_window_switches}次），当前已切换${newCount}次`, 'high');
+            reportCheating('window_switch_exceeded', `切换窗口超过限制${exam.max_window_switches}次，当前已切换${newCount}次`, 'high');
           }
         }
       }

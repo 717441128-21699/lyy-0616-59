@@ -2,8 +2,16 @@ const jwt = require('jsonwebtoken');
 const { findOne } = require('../database');
 
 function authenticateToken(req, res, next) {
+  let token = null;
+  
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  if (authHeader && authHeader.split(' ')[1]) {
+    token = authHeader.split(' ')[1];
+  }
+  
+  if (!token && req.query && req.query.token) {
+    token = req.query.token;
+  }
 
   if (!token) {
     return res.status(401).json({ error: '未提供认证令牌' });

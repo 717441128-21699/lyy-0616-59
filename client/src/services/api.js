@@ -78,7 +78,10 @@ export const recordingAPI = {
       }
     }),
   getEnrollmentRecordings: (enrollmentId) => api.get(`/recordings/enrollment/${enrollmentId}`),
-  getRecordingPlayUrl: (recordingId) => `/api/recordings/${recordingId}/play`,
+  getRecordingPlayUrl: (recordingId) => {
+    const token = localStorage.getItem('token') || '';
+    return `/api/recordings/${recordingId}/play?token=${encodeURIComponent(token)}`;
+  },
 };
 
 export default api;
