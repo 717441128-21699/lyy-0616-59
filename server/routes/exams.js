@@ -47,7 +47,26 @@ router.get('/:id', authenticateToken, (req, res) => {
     .map(q => {
       const qCopy = { ...q };
       if (qCopy.options) {
-        qCopy.options = JSON.parse(qCopy.options);
+        try {
+          let parsed = JSON.parse(qCopy.options);
+          if (typeof parsed === 'string') {
+            parsed = JSON.parse(parsed);
+          }
+          qCopy.options = parsed;
+        } catch (e) {
+          qCopy.options = [];
+        }
+      }
+      if (qCopy.type === 'multiple' && qCopy.answer && req.user.role !== 'student') {
+        try {
+          let parsed = JSON.parse(qCopy.answer);
+          if (typeof parsed === 'string') {
+            parsed = JSON.parse(parsed);
+          }
+          qCopy.answer = parsed;
+        } catch (e) {
+          qCopy.answer = [];
+        }
       }
       if (req.user.role === 'student') {
         delete qCopy.answer;

@@ -39,7 +39,30 @@ router.post('/:examId/enroll', authenticateToken, (req, res) => {
   }
 
   if (existing && existing.status === 'in_progress') {
-    return res.json({ enrollment: existing, message: '继续考试' });
+    const now = new Date();
+    const startTime = new Date(existing.start_time);
+    const elapsedSeconds = Math.floor((now - startTime) / 1000);
+    const totalSeconds = exam.duration * 60;
+    const remainingSeconds = Math.max(0, totalSeconds - elapsedSeconds);
+    
+    const savedAnswers = findMany('answers', a => a.enrollment_id === existing.id);
+    const answerMap = {};
+    savedAnswers.forEach(a => {
+      answerMap[a.question_id] = a.answer;
+    });
+    
+    const windowSwitches = findMany('behavior_logs', 
+      bl => bl.enrollment_id === existing.id && bl.action_type === 'window_switch'
+    ).length;
+    
+    return res.json({ 
+      enrollment: existing, 
+      message: '继续考试',
+      remaining_seconds: remainingSeconds,
+      saved_answers: answerMap,
+      window_switch_count: windowSwitches,
+      cheating_count: findMany('cheating_events', ce => ce.enrollment_id === existing.id).length
+    });
   }
 
   const enrollment = insert('exam_enrollments', {
@@ -59,7 +82,14 @@ router.post('/:examId/enroll', authenticateToken, (req, res) => {
     action_data: JSON.stringify({ time: new Date().toISOString() })
   });
 
-  res.json({ enrollment, message: '开始考试' });
+  res.json({ 
+    enrollment, 
+    message: '开始考试',
+    remaining_seconds: exam.duration * 60,
+    saved_answers: {},
+    window_switch_count: 0,
+    cheating_count: 0
+  });
 });
 
 router.post('/:examId/answer/:questionId', authenticateToken, (req, res) => {
@@ -167,8 +197,24 @@ router.post('/:examId/submit', authenticateToken, (req, res) => {
           score = question.score;
         }
       } else if (question.type === 'multiple') {
-        const correctAnswers = JSON.parse(question.answer || '[]');
-        const userAnswers = JSON.parse(userAnswer.answer || '[]');
+        let correctAnswers;
+        let userAnswers;
+        try {
+          correctAnswers = JSON.parse(question.answer || '[]');
+          if (typeof correctAnswers === 'string') {
+            correctAnswers = JSON.parse(correctAnswers);
+          }
+        } catch (e) {
+          correctAnswers = [];
+        }
+        try {
+          userAnswers = JSON.parse(userAnswer.answer || '[]');
+          if (typeof userAnswers === 'string') {
+            userAnswers = JSON.parse(userAnswers);
+          }
+        } catch (e) {
+          userAnswers = [];
+        }
         
         if (correctAnswers.length === userAnswers.length &&
             correctAnswers.every(a => userAnswers.includes(a))) {
@@ -328,17 +374,41 @@ router.get('/:examId/enrollment/:enrollmentId/answers', authenticateToken, requi
       };
       
       if (question?.options) {
-        answerCopy.question_options = JSON.parse(question.options);
+        try {
+          let parsed = JSON.parse(question.options);
+          if (typeof parsed === 'string') {
+            parsed = JSON.parse(parsed);
+          }
+          answerCopy.question_options = parsed;
+        } catch (e) {
+          answerCopy.question_options = [];
+        }
       } else {
         answerCopy.question_options = null;
       }
 
       if (question?.type === 'multiple' && question?.answer) {
-        answerCopy.correct_answer = JSON.parse(question.answer);
+        try {
+          let parsed = JSON.parse(question.answer);
+          if (typeof parsed === 'string') {
+            parsed = JSON.parse(parsed);
+          }
+          answerCopy.correct_answer = parsed;
+        } catch (e) {
+          answerCopy.correct_answer = [];
+        }
       }
       
       if (question?.type === 'multiple' && a.answer) {
-        answerCopy.answer = JSON.parse(a.answer);
+        try {
+          let parsed = JSON.parse(a.answer);
+          if (typeof parsed === 'string') {
+            parsed = JSON.parse(parsed);
+          }
+          answerCopy.answer = parsed;
+        } catch (e) {
+          answerCopy.answer = [];
+        }
       }
       
       return answerCopy;

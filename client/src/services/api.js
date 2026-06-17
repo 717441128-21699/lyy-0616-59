@@ -66,4 +66,19 @@ export const reportAPI = {
   getExamSummary: (examId) => api.get(`/reports/exam/${examId}/summary`),
 };
 
+export const recordingAPI = {
+  uploadRecording: (formData, onProgress) => 
+    api.post('/recordings/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(percent);
+        }
+      }
+    }),
+  getEnrollmentRecordings: (enrollmentId) => api.get(`/recordings/enrollment/${enrollmentId}`),
+  getRecordingPlayUrl: (recordingId) => `/api/recordings/${recordingId}/play`,
+};
+
 export default api;

@@ -12,7 +12,8 @@ let db = {
   exam_enrollments: [],
   answers: [],
   cheating_events: [],
-  behavior_logs: []
+  behavior_logs: [],
+  recordings: []
 };
 
 let nextIds = {
@@ -22,7 +23,8 @@ let nextIds = {
   exam_enrollments: 1,
   answers: 1,
   cheating_events: 1,
-  behavior_logs: 1
+  behavior_logs: 1,
+  recordings: 1
 };
 
 function loadDatabase() {
@@ -151,7 +153,8 @@ function initSeedData() {
     exam_enrollments: 1,
     answers: 1,
     cheating_events: 1,
-    behavior_logs: 1
+    behavior_logs: 1,
+    recordings: 1
   };
 
   saveDatabase();

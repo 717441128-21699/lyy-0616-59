@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../../components/Layout';
-import { examActionAPI, examAPI } from '../../services/api';
+import { examActionAPI, examAPI, recordingAPI } from '../../services/api';
 
 export default function GradingPage() {
   const { examId } = useParams();
@@ -17,6 +17,10 @@ export default function GradingPage() {
   
   const [scoreInput, setScoreInput] = useState('');
   const [commentInput, setCommentInput] = useState('');
+  
+  const [recordings, setRecordings] = useState([]);
+  const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [selectedRecording, setSelectedRecording] = useState(null);
 
   useEffect(() => {
     loadExam();
@@ -46,12 +50,17 @@ export default function GradingPage() {
 
   const loadStudentAnswers = async (enrollmentId) => {
     try {
-      const response = await examActionAPI.getEnrollmentAnswers(examId, enrollmentId);
-      setAnswers(response.data.answers);
-      setSelectedEnrollment(response.data.enrollment);
+      const [answersRes, recordingsRes] = await Promise.all([
+        examActionAPI.getEnrollmentAnswers(examId, enrollmentId),
+        recordingAPI.getEnrollmentRecordings(enrollmentId).catch(() => ({ data: { recordings: [] } }))
+      ]);
+      
+      setAnswers(answersRes.data.answers);
+      setSelectedEnrollment(answersRes.data.enrollment);
+      setRecordings(recordingsRes.data.recordings || []);
       setCurrentAnswerIndex(0);
       
-      const firstUnscored = response.data.answers.findIndex(
+      const firstUnscored = answersRes.data.answers.findIndex(
         a => a.score === null || a.score === undefined
       );
       if (firstUnscored >= 0) {
@@ -272,6 +281,39 @@ export default function GradingPage() {
                 </div>
               </div>
 
+              {recordings.length > 0 && (
+                <div className="bg-blue-50 rounded-xl p-5 mb-6">
+                  <h4 className="font-medium text-blue-800 mb-3 flex items-center gap-2">
+                    <span>🎥</span> 考试录像记录
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    {recordings.map((rec) => (
+                      <button
+                        key={rec.id}
+                        onClick={() => {
+                          setSelectedRecording(rec);
+                          setShowRecordingModal(true);
+                        }}
+                        className="flex items-center gap-3 p-3 bg-white rounded-lg hover:bg-blue-50 border border-blue-100 transition text-left"
+                      >
+                        <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center text-2xl">
+                          {rec.type === 'camera' ? '📷' : '🖥️'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-800 text-sm">
+                            {rec.type === 'camera' ? '摄像头录像' : '屏幕共享录像'}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {rec.duration ? `${Math.round(rec.duration)}秒 · ${(rec.file_size / 1024 / 1024).toFixed(1)}MB` : ''}
+                          </p>
+                        </div>
+                        <span className="text-primary-500 text-sm">▶ 播放</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-2 mb-6 flex-wrap">
                 {answers.map((ans, idx) => (
                   <button
@@ -400,6 +442,39 @@ export default function GradingPage() {
           )}
         </div>
       </div>
+
+      {showRecordingModal && selectedRecording && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+              <div>
+                <h3 className="text-xl font-semibold text-gray-800">
+                  {selectedRecording.type === 'camera' ? '📷 摄像头录像' : '🖥️ 屏幕共享录像'}
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  开始时间: {new Date(selectedRecording.start_time).toLocaleString('zh-CN')}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowRecordingModal(false);
+                  setSelectedRecording(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 bg-black flex items-center justify-center p-4 overflow-hidden">
+              <video
+                controls
+                src={recordingAPI.getRecordingPlayUrl(selectedRecording.id)}
+                className="max-w-full max-h-full rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { examAPI, examActionAPI } from '../../services/api';
+import { examAPI, examActionAPI, recordingAPI } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { io } from 'socket.io-client';
 import * as faceapi from 'face-api.js';
@@ -27,6 +27,9 @@ export default function ExamRoom() {
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
   const [teacherMessage, setTeacherMessage] = useState(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [enrollmentId, setEnrollmentId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState({});
+  const [recordingStatus, setRecordingStatus] = useState({ camera: false, screen: false });
   
   const videoRef = useRef(null);
   const screenVideoRef = useRef(null);
@@ -37,6 +40,20 @@ export default function ExamRoom() {
   const noFaceStartTimeRef = useRef(null);
   const streamRef = useRef(null);
   const screenStreamRef = useRef(null);
+  const timerRef = useRef(null);
+  const visibilityCleanupRef = useRef(null);
+  
+  const windowAlertSentRef = useRef(false);
+  const noFaceAlertSentRef = useRef(false);
+  const multipleFacesAlertSentRef = useRef(false);
+  const screenStopAlertSentRef = useRef(false);
+
+  const cameraRecorderRef = useRef(null);
+  const screenRecorderRef = useRef(null);
+  const cameraChunksRef = useRef([]);
+  const screenChunksRef = useRef([]);
+  const cameraStartTimeRef = useRef(null);
+  const screenStartTimeRef = useRef(null);
 
   const loadFaceModels = useCallback(async () => {
     try {
@@ -62,11 +79,20 @@ export default function ExamRoom() {
   }, [examId]);
 
   const cleanupResources = () => {
+    stopCameraRecording();
+    stopScreenRecording();
+    
     if (faceDetectionIntervalRef.current) {
       clearInterval(faceDetectionIntervalRef.current);
     }
     if (frameSendIntervalRef.current) {
       clearInterval(frameSendIntervalRef.current);
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    if (visibilityCleanupRef.current && typeof visibilityCleanupRef.current === 'function') {
+      visibilityCleanupRef.current();
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -95,12 +121,41 @@ export default function ExamRoom() {
 
   const startExam = async () => {
     try {
-      await examActionAPI.enroll(examId);
+      const response = await examActionAPI.enroll(examId);
+      const data = response.data;
+      
       setExamStarted(true);
+      setEnrollmentId(data.enrollment.id);
+      
+      setTimeout(() => {
+        if (cameraEnabled && !cameraRecorderRef.current) {
+          startCameraRecording();
+        }
+        if (screenSharing && !screenRecorderRef.current) {
+          startScreenRecording();
+        }
+      }, 100);
+      
+      setTimeLeft(data.remaining_seconds);
+      
+      if (data.saved_answers && Object.keys(data.saved_answers).length > 0) {
+        setAnswers(data.saved_answers);
+      }
+      
+      if (data.window_switch_count) {
+        setWindowSwitchCount(data.window_switch_count);
+        if (exam?.max_window_switches && data.window_switch_count > exam.max_window_switches) {
+          windowAlertSentRef.current = true;
+        }
+      }
+      
+      if (data.cheating_count) {
+        setCheatingCount(data.cheating_count);
+      }
       
       initSocket();
       startTimer();
-      setupVisibilityListener();
+      visibilityCleanupRef.current = setupVisibilityListener();
     } catch (err) {
       alert(err.response?.data?.error || '开始考试失败');
     }
@@ -128,10 +183,14 @@ export default function ExamRoom() {
   };
 
   const startTimer = () => {
-    const timer = setInterval(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          clearInterval(timer);
+          clearInterval(timerRef.current);
+          timerRef.current = null;
           handleSubmit();
           return 0;
         }
@@ -146,11 +205,15 @@ export default function ExamRoom() {
         const newCount = windowSwitchCount + 1;
         setWindowSwitchCount(newCount);
         
+        examActionAPI.logBehavior(examId, 'window_switch', { count: newCount, time: new Date().toISOString() }).catch(() => {});
+        
         if (exam?.max_window_switches && newCount > exam.max_window_switches) {
-          reportCheating('window_switch', `切换窗口 ${newCount} 次，超过限制`, 'warning');
-          showWarningMessage(`警告：您已切换窗口 ${newCount} 次，请注意考试纪律！`);
-        } else {
-          reportCheating('window_switch', `切换窗口第 ${newCount} 次`, 'info');
+          showWarningMessage(`警告：您已切换窗口 ${newCount} 次，超过限制！请立即停止切换窗口。`);
+          
+          if (!windowAlertSentRef.current) {
+            windowAlertSentRef.current = true;
+            reportCheating('window_switch_exceeded', `切换窗口超过限制（${exam.max_window_switches}次），当前已切换${newCount}次`, 'high');
+          }
         }
       }
     };
@@ -178,11 +241,16 @@ export default function ExamRoom() {
       
       setCameraEnabled(true);
       
-      if (modelsLoaded) {
+      const faceEnabled = !!exam?.face_detection_enabled;
+      if (modelsLoaded && faceEnabled) {
         startFaceDetection();
       }
       
       startFrameSending();
+      
+      if (enrollmentId) {
+        startCameraRecording();
+      }
     } catch (err) {
       console.error('开启摄像头失败:', err);
       alert('无法开启摄像头，请检查权限设置');
@@ -203,10 +271,19 @@ export default function ExamRoom() {
       }
       
       setScreenSharing(true);
+      screenStopAlertSentRef.current = false;
+      
+      if (enrollmentId) {
+        startScreenRecording();
+      }
       
       stream.getVideoTracks()[0].onended = () => {
         setScreenSharing(false);
-        reportCheating('screen_share_stopped', '屏幕共享被停止', 'warning');
+        stopScreenRecording();
+        if (!screenStopAlertSentRef.current) {
+          screenStopAlertSentRef.current = true;
+          reportCheating('screen_share_stopped', '屏幕共享被停止', 'warning');
+        }
         showWarningMessage('警告：屏幕共享已停止，请重新开启！');
       };
     } catch (err) {
@@ -238,18 +315,27 @@ export default function ExamRoom() {
           
           if (noFaceDuration > 10) {
             setFaceDetected(false);
-            reportCheating('no_face_detected', `长时间未检测到人脸（${Math.round(noFaceDuration)}秒）`, 'warning');
+            if (!noFaceAlertSentRef.current) {
+              noFaceAlertSentRef.current = true;
+              reportCheating('no_face_detected', `长时间未检测到人脸（超过${Math.round(noFaceDuration)}秒）`, 'high');
+            }
+            showWarningMessage('警告：长时间未检测到人脸，请回到摄像头前！');
           }
         } else {
           noFaceStartTimeRef.current = null;
           setFaceDetected(true);
+          noFaceAlertSentRef.current = false;
           
           if (detections.length > 1) {
             setMultipleFacesDetected(true);
-            reportCheating('multiple_faces', `检测到 ${detections.length} 张人脸`, 'warning');
+            if (!multipleFacesAlertSentRef.current) {
+              multipleFacesAlertSentRef.current = true;
+              reportCheating('multiple_faces', `检测到 ${detections.length} 张人脸`, 'high');
+            }
             showWarningMessage('警告：检测到多张人脸，请确保只有您一人在考试！');
           } else {
             setMultipleFacesDetected(false);
+            multipleFacesAlertSentRef.current = false;
           }
         }
       } catch (err) {
@@ -281,6 +367,129 @@ export default function ExamRoom() {
         frameData
       });
     }, 1000);
+  };
+
+  const startCameraRecording = () => {
+    if (!streamRef.current || !enrollmentId) return;
+
+    try {
+      let options = { mimeType: 'video/webm;codecs=vp9' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm;codecs=vp8' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: 'video/webm' };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = undefined;
+          }
+        }
+      }
+
+      cameraChunksRef.current = [];
+      const recorder = options ? new MediaRecorder(streamRef.current, options) : new MediaRecorder(streamRef.current);
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          cameraChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(cameraChunksRef.current, { type: 'video/webm' });
+        const duration = cameraStartTimeRef.current ? (Date.now() - cameraStartTimeRef.current) / 1000 : 0;
+        await uploadRecording(blob, 'camera', duration, cameraStartTimeRef.current ? new Date(cameraStartTimeRef.current).toISOString() : new Date().toISOString());
+      };
+
+      recorder.start(10000);
+      cameraRecorderRef.current = recorder;
+      cameraStartTimeRef.current = Date.now();
+      setRecordingStatus(prev => ({ ...prev, camera: true }));
+    } catch (err) {
+      console.error('摄像头录像启动失败:', err);
+    }
+  };
+
+  const startScreenRecording = () => {
+    if (!screenStreamRef.current || !enrollmentId) return;
+
+    try {
+      let options = { mimeType: 'video/webm;codecs=vp9' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm;codecs=vp8' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options = { mimeType: 'video/webm' };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = undefined;
+          }
+        }
+      }
+
+      screenChunksRef.current = [];
+      const recorder = options ? new MediaRecorder(screenStreamRef.current, options) : new MediaRecorder(screenStreamRef.current);
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          screenChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(screenChunksRef.current, { type: 'video/webm' });
+        const duration = screenStartTimeRef.current ? (Date.now() - screenStartTimeRef.current) / 1000 : 0;
+        await uploadRecording(blob, 'screen', duration, screenStartTimeRef.current ? new Date(screenStartTimeRef.current).toISOString() : new Date().toISOString());
+      };
+
+      recorder.start(10000);
+      screenRecorderRef.current = recorder;
+      screenStartTimeRef.current = Date.now();
+      setRecordingStatus(prev => ({ ...prev, screen: true }));
+    } catch (err) {
+      console.error('屏幕录像启动失败:', err);
+    }
+  };
+
+  const stopCameraRecording = () => {
+    if (cameraRecorderRef.current && cameraRecorderRef.current.state !== 'inactive') {
+      try {
+        cameraRecorderRef.current.stop();
+      } catch (e) {
+        console.error('停止摄像头录像失败:', e);
+      }
+    }
+    setRecordingStatus(prev => ({ ...prev, camera: false }));
+  };
+
+  const stopScreenRecording = () => {
+    if (screenRecorderRef.current && screenRecorderRef.current.state !== 'inactive') {
+      try {
+        screenRecorderRef.current.stop();
+      } catch (e) {
+        console.error('停止屏幕录像失败:', e);
+      }
+    }
+    setRecordingStatus(prev => ({ ...prev, screen: false }));
+  };
+
+  const uploadRecording = async (blob, type, duration, startTime) => {
+    if (!enrollmentId || blob.size === 0) return;
+
+    try {
+      const formData = new FormData();
+      formData.append('video', blob, `${type}_${Date.now()}.webm`);
+      formData.append('examId', examId);
+      formData.append('enrollmentId', enrollmentId.toString());
+      formData.append('type', type);
+      formData.append('duration', duration.toString());
+      formData.append('startTime', startTime);
+
+      setUploadProgress(prev => ({ ...prev, [type]: 0 }));
+      await recordingAPI.uploadRecording(formData, (percent) => {
+        setUploadProgress(prev => ({ ...prev, [type]: percent }));
+      });
+      setUploadProgress(prev => ({ ...prev, [type]: 100 }));
+      console.log(`${type}录像上传成功`);
+    } catch (err) {
+      console.error(`${type}录像上传失败:`, err);
+    }
   };
 
   const reportCheating = async (eventType, description, severity = 'warning') => {
@@ -322,6 +531,18 @@ export default function ExamRoom() {
 
   const handleSubmit = async () => {
     try {
+      stopCameraRecording();
+      stopScreenRecording();
+      
+      let waitCount = 0;
+      const cameraRecordingActive = cameraRecorderRef.current && cameraRecorderRef.current.state !== 'inactive';
+      const screenRecordingActive = screenRecorderRef.current && screenRecorderRef.current.state !== 'inactive';
+      
+      while ((cameraRecordingActive || screenRecordingActive) && waitCount < 30) {
+        await new Promise(r => setTimeout(r, 500));
+        waitCount++;
+      }
+      
       await examActionAPI.submitExam(examId);
       cleanupResources();
       navigate(`/student/report/${examId}`);
@@ -362,8 +583,8 @@ export default function ExamRoom() {
             <ul className="space-y-2 text-sm text-blue-700">
               <li>• 考试时长：{exam.duration} 分钟</li>
               <li>• 题目数量：{exam.questions.length} 题</li>
-              <li>• 必须开启摄像头和屏幕共享</li>
-              <li>• 系统将进行人脸检测</li>
+              <li>• 必须开启摄像头{exam.screen_share_required ? '和屏幕共享' : ''}</li>
+              {exam.face_detection_enabled && <li>• 系统将进行人脸检测监控考试过程</li>}
               <li>• 切换窗口超过 {exam.max_window_switches} 次将触发预警</li>
               <li>• 请确保您一人独立完成考试</li>
             </ul>

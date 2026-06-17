@@ -164,7 +164,7 @@ export default function ExamEditor() {
       const questionData = {
         type: questionForm.type,
         content: questionForm.content,
-        options: options ? JSON.stringify(options) : null,
+        options: options,
         answer: answer,
         score: questionForm.score,
         order_index: editingQuestion ? editingQuestion.order_index : exam.questions.length + 1

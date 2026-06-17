@@ -13,6 +13,7 @@ const authRoutes = require('./routes/auth');
 const examRoutes = require('./routes/exams');
 const examActionRoutes = require('./routes/exam-actions');
 const reportRoutes = require('./routes/reports');
+const recordingRoutes = require('./routes/recordings');
 
 const dataDir = path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
@@ -39,6 +40,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/exams', examRoutes);
 app.use('/api/exam', examActionRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/recordings', recordingRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: '监考系统运行正常' });
