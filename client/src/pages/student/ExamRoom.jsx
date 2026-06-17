@@ -504,24 +504,28 @@ export default function ExamRoom() {
   };
 
   const reportCheating = async (eventType, description, severity = 'warning', recordingType = null) => {
-    setCheatingCount(prev => prev + 1);
     try {
       const elapsedMs = examStartTimeRef.current ? Date.now() - examStartTimeRef.current : 0;
       const relativeSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
       
-      await examActionAPI.reportCheating(examId, eventType, description, severity, relativeSeconds, recordingType);
+      const response = await examActionAPI.reportCheating(examId, eventType, description, severity, relativeSeconds, recordingType);
       
-      if (socketRef.current) {
-        socketRef.current.emit('cheating_alert', {
-          examId,
-          studentId: user.id,
-          studentName: user.name,
-          eventType,
-          description,
-          severity,
-          relativeSeconds,
-          recordingType
-        });
+      if (response.data.created !== false) {
+        setCheatingCount(prev => prev + 1);
+        
+        if (socketRef.current) {
+          socketRef.current.emit('cheating_alert', {
+            examId,
+            enrollmentId,
+            studentId: user.id,
+            studentName: user.name,
+            eventType,
+            description,
+            severity,
+            relativeSeconds,
+            recordingType
+          });
+        }
       }
     } catch (err) {
       console.error('上报作弊事件失败:', err);

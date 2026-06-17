@@ -112,14 +112,24 @@ router.get('/exam/:examId/student/:studentId', authenticateToken, (req, res) => 
   const alertCount = windowSwitchExceedCount + multipleFaceCount + noFaceCount + screenShareStopCount;
 
   const windowSwitchLogs = behaviorLogs.filter(l => l.action_type === 'window_switch');
-  const windowSwitchTotalCount = windowSwitchLogs.length > 0 
-    ? Math.max(...windowSwitchLogs.map(l => {
-        try {
-          const d = typeof l.details === 'string' ? JSON.parse(l.details) : l.details;
-          return parseInt(d?.count) || 0;
-        } catch (e) { return 0; }
-      }))
-    : 0;
+  let windowSwitchTotalCount = windowSwitchLogs.length;
+  
+  if (windowSwitchLogs.length > 0) {
+    const maxCountFromData = Math.max(...windowSwitchLogs.map(l => {
+      try {
+        const raw = l.action_data || l.details;
+        const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return parseInt(d?.count) || 0;
+      } catch (e) { return 0; }
+    }));
+    if (maxCountFromData > 0) {
+      windowSwitchTotalCount = maxCountFromData;
+    }
+  }
+
+  if (enrollment.window_switch_count != null && enrollment.window_switch_count > windowSwitchTotalCount) {
+    windowSwitchTotalCount = enrollment.window_switch_count;
+  }
 
   const pendingCount = cheatingEvents.filter(e => e.status === 'pending').length;
   const resolvedCount = cheatingEvents.filter(e => e.status === 'resolved').length;

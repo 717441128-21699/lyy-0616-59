@@ -37,7 +37,8 @@ const DEFAULT_FIELDS = {
     status: 'published'
   },
   exam_enrollments: {
-    cheating_score: 0
+    cheating_score: 0,
+    window_switch_count: 0
   },
   cheating_events: {
     status: 'pending',

@@ -87,26 +87,9 @@ export default function ReportPage() {
     if (!window.confirm('确认标记此告警为已处理？')) return;
     try {
       await examActionAPI.handleCheatingEvent(examId, event.id, '报告中标记处理', 'resolved');
-      setStudentReport(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          cheatingAnalysis: {
-            ...prev.cheatingAnalysis,
-            events: prev.cheatingAnalysis.events.map(e => 
-              e.id === event.id ? { ...e, status: 'resolved', handled_by: '当前老师', handled_at: new Date().toISOString(), note: '报告中标记处理' } : e
-            ),
-            eventsByType: Object.fromEntries(
-              Object.entries(prev.cheatingAnalysis.eventsByType || {}).map(([type, events]) => [
-                type,
-                events.map(e => e.id === event.id ? { ...e, status: 'resolved', handled_by: '当前老师', handled_at: new Date().toISOString(), note: '报告中标记处理' } : e)
-              ])
-            ),
-            pendingCount: Math.max(0, (prev.cheatingAnalysis.pendingCount || 0) - 1),
-            resolvedCount: (prev.cheatingAnalysis.resolvedCount || 0) + 1
-          }
-        };
-      });
+      if (selectedStudent) {
+        await loadStudentReport(selectedStudent);
+      }
     } catch (err) {
       console.error('标记失败:', err);
       alert('标记失败');

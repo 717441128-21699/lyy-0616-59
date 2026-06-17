@@ -185,6 +185,7 @@ export default function ProctorRoom() {
       setShowHandleModal(false);
       setSelectedAlert(null);
       setHandleNote('');
+      await loadCheatingEvents();
     } catch (err) {
       console.error('标记处理失败:', err);
       alert('标记失败，请重试');

@@ -233,10 +233,15 @@ router.post('/:examId/submit', authenticateToken, (req, res) => {
     totalScore += score;
   });
 
+  const windowSwitchCount = findMany('behavior_logs', 
+    bl => bl.enrollment_id === enrollment.id && bl.action_type === 'window_switch'
+  ).length;
+
   update('exam_enrollments', enrollment.id, {
     status: 'submitted',
     submit_time: new Date().toISOString(),
-    score: totalScore
+    score: totalScore,
+    window_switch_count: windowSwitchCount
   });
 
   insert('behavior_logs', {
@@ -266,11 +271,10 @@ router.post('/:examId/cheating-event', authenticateToken, (req, res) => {
 
   const existing = findOne('cheating_events', ce => 
     ce.enrollment_id === enrollment.id && 
-    ce.event_type === event_type &&
-    ce.status === 'pending'
+    ce.event_type === event_type
   );
   if (existing) {
-    return res.json({ message: '该类型告警已存在，无需重复上报', event: existing });
+    return res.json({ message: '该类型告警已存在，无需重复上报', event: existing, created: false });
   }
 
   const event = insert('cheating_events', {
@@ -314,7 +318,7 @@ router.post('/:examId/cheating-event', authenticateToken, (req, res) => {
     }
   }
 
-  res.json({ message: '事件已记录', event });
+  res.json({ message: '事件已记录', event, created: true });
 });
 
 router.put('/:examId/cheating-events/:eventId/handle', authenticateToken, requireRole('teacher'), (req, res) => {
